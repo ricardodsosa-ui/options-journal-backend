@@ -22,7 +22,7 @@ export async function syncTrades() {
     }
 
     // Use first account (most users have one)
-    const accountId = accounts[0]?.accountNumber || accounts[0]?.hashValue;
+    const accountId = accounts[0]?.hashValue;
     const lastSync  = await getLastSyncTime();
 
     // 2. Fetch filled options orders since last sync

@@ -101,7 +101,7 @@ export async function getValidAccessToken() {
 // Fetch all accounts
 export async function getAccounts() {
   const token = await getValidAccessToken();
-  const { data } = await axios.get(`${SCHWAB_BASE}/trader/v1/accounts`, {
+  const { data } = await axios.get(`${SCHWAB_BASE}/trader/v1/accountNumbers`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return data;
