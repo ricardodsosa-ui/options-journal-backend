@@ -4,7 +4,7 @@ import fs from "fs/promises";
 import path from "path";
 
 const SCHWAB_BASE   = "https://api.schwabapi.com";
-const TOKEN_FILE    = path.resolve("./tokens.enc");
+const TOKEN_FILE = process.env.TOKEN_FILE_PATH || path.resolve("./tokens.enc");
 const REDIRECT_URI  = process.env.REDIRECT_URI || "http://localhost:3001/callback";
 const CLIENT_ID     = process.env.SCHWAB_CLIENT_ID;
 const CLIENT_SECRET = process.env.SCHWAB_CLIENT_SECRET;
