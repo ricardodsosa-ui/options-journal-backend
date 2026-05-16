@@ -23,7 +23,7 @@ export async function syncTrades() {
 
     // Use first account (most users have one)
     const accountId = accounts[0]?.hashValue;
-    const lastSync  = await getLastSyncTime();
+    const lastSync  = null; // Always fetch full 90-day window; upsert handles dedup
 
     // 2. Fetch filled options orders since last sync
     const orders = await getOptionsOrders(accountId, lastSync);
