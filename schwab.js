@@ -170,20 +170,17 @@ export function parseOrderToTrade(order) {
   const action = leg.instruction; // BUY_TO_OPEN, SELL_TO_CLOSE, etc.
   const price  = order.price || order.orderActivityCollection?.[0]?.executionLegs?.[0]?.price || 0;
 
+  const isBuy = action.includes("BUY");
   return {
-    id:        order.orderId,
-    date:      order.enteredTime?.slice(0, 10),
+    orderId:    order.orderId,
+    date:       order.enteredTime?.slice(0, 10),
     ticker,
     type,
     strike,
     expiry,
-    premium:   action.includes("BUY") ? price : null,
-    closePrice: action.includes("SELL") ? price : null,
-    contracts: leg.quantity,
-    status:    action.includes("BUY") ? "Open" : "Closed",
-    strategy:  `Long ${type}`,
-    notes:     "",
-    // Greeks populated separately via getOptionsChain
-    delta: null, gamma: null, theta: null, vega: null, iv: null,
+    price,
+    contracts:  leg.quantity,
+    action:     isBuy ? "BUY" : "SELL",
+    notes:      "",
   };
 }

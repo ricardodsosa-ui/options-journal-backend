@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 
 // Simple file-based database — trades stored as JSON
 // For scaling up later, swap this for SQLite or PostgreSQL
-const DB_FILE = path.resolve("./trades.json");
+const DB_FILE = process.env.TRADES_FILE_PATH || path.resolve("./trades.json");
 
 async function readDB() {
   try {

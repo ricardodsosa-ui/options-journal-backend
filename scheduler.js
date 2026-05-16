@@ -31,28 +31,98 @@ export async function syncTrades() {
 
     let saved = 0;
 
+    // Sort orders by date — oldest first, so FIFO matching works correctly
+    orders.sort((a, b) => new Date(a.enteredTime) - new Date(b.enteredTime));
+
     for (const order of orders) {
-      const trade = parseOrderToTrade(order);
-      if (!trade) continue;
+      const parsed = parseOrderToTrade(order);
+      if (!parsed) continue;
 
-      // 3. Try to enrich with Greeks from options chain
-      try {
-        const chain = await getOptionsChain(trade.ticker);
-        const greeks = extractGreeks(chain, trade);
-        if (greeks) {
-          trade.delta = greeks.delta;
-          trade.gamma = greeks.gamma;
-          trade.theta = greeks.theta;
-          trade.vega  = greeks.vega;
-          trade.iv    = greeks.volatility;
+      if (parsed.action === "BUY") {
+        // Buy-to-open: create a new open trade row
+        await saveTrade({
+          id:         parsed.orderId,
+          date:       parsed.date,
+          ticker:     parsed.ticker,
+          type:       parsed.type,
+          strike:     parsed.strike,
+          expiry:     parsed.expiry,
+          premium:    parsed.price,
+          contracts:  parsed.contracts,
+          openAction: "BUY",
+          status:     "Open",
+          strategy:   `Long ${parsed.type}`,
+          source:     "schwab",
+        });
+
+        // Enrich with Greeks (best-effort)
+        try {
+          const chain = await getOptionsChain(parsed.ticker);
+          const g = extractGreeks(chain, parsed);
+          if (g) {
+            await saveTrade({
+              id: parsed.orderId,
+              date: parsed.date, ticker: parsed.ticker, type: parsed.type,
+              strike: parsed.strike, expiry: parsed.expiry,
+              premium: parsed.price, contracts: parsed.contracts,
+              openAction: "BUY", status: "Open", strategy: `Long ${parsed.type}`,
+              source: "schwab",
+              delta: g.delta, gamma: g.gamma, theta: g.theta, vega: g.vega, iv: g.volatility,
+            });
+          }
+        } catch {}
+
+        saved++;
+      } else {
+        // Sell-to-close: match against oldest open trades for this contract (FIFO)
+        const allTrades = await getTrades();
+        const matches = allTrades
+          .filter(t =>
+            t.status === "Open" &&
+            t.ticker === parsed.ticker &&
+            t.type === parsed.type &&
+            Number(t.strike) === parsed.strike &&
+            t.expiry === parsed.expiry &&
+            t.openAction === "BUY"
+          )
+          .sort((a, b) => new Date(a.date) - new Date(b.date)); // oldest first
+
+        let remaining = parsed.contracts;
+        for (const openTrade of matches) {
+          if (remaining <= 0) break;
+          const fillQty = Math.min(remaining, openTrade.contracts);
+
+          if (fillQty === openTrade.contracts) {
+            // Fully close this lot
+            await saveTrade({
+              ...openTrade,
+              closePrice: parsed.price,
+              closeDate:  parsed.date,
+              status:     "Closed",
+            });
+          } else {
+            // Partial close: split the lot into closed portion + remaining open portion
+            await saveTrade({
+              ...openTrade,
+              contracts:  fillQty,
+              closePrice: parsed.price,
+              closeDate:  parsed.date,
+              status:     "Closed",
+              id:         `${openTrade.id}-close-${parsed.orderId}`,
+            });
+            await saveTrade({
+              ...openTrade,
+              contracts: openTrade.contracts - fillQty,
+            });
+          }
+          remaining -= fillQty;
+          saved++;
         }
-      } catch {
-        // Greeks enrichment is best-effort — don't fail the sync
-      }
 
-      trade.source = "schwab";
-      await saveTrade(trade);
-      saved++;
+        if (remaining > 0) {
+          console.warn(`⚠ Sell order ${parsed.orderId} for ${parsed.contracts} ${parsed.ticker} ${parsed.type} had ${remaining} unmatched contracts (no matching open position)`);
+        }
+      }
     }
 
     console.log(`✓ Sync complete — saved ${saved} trades`);
