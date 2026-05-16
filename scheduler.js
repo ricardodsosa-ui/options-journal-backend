@@ -1,5 +1,5 @@
 import { getAccounts, getOptionsOrders, getOptionsChain, parseOrderToTrade, getStoredTokens } from "./schwab.js";
-import { saveTrade, getLastSyncTime } from "./db.js";
+import { saveTrade, getLastSyncTime, getTrades } from "./db.js";
 
 const POLL_INTERVAL_MS = 10 * 60 * 1000; // Every 10 minutes
 
