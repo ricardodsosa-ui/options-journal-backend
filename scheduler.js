@@ -60,8 +60,11 @@ export async function syncTrades() {
 
   } catch (err) {
     console.error("Sync error:", err.message);
+    console.error("Status:", err.response?.status);
+    console.error("Schwab response:", JSON.stringify(err.response?.data));
+    console.error("Failed URL:", err.config?.url);
     throw err;
-  }
+}
 }
 
 // ─── EXTRACT GREEKS FROM CHAIN RESPONSE ──────────────────────────────────────
