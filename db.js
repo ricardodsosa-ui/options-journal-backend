@@ -34,12 +34,14 @@ export async function saveTrade(trade) {
     id:         trade.id || randomUUID(),
     date:       trade.date,
     ticker:     trade.ticker?.toUpperCase(),
-    type:       trade.type,       // Call | Put
+    type:       trade.type,
     strike:     Number(trade.strike),
     expiry:     trade.expiry,
-    premium:    Number(trade.premium),
+    premium:    trade.premium != null ? Number(trade.premium) : null,
     contracts:  Number(trade.contracts) || 1,
     closePrice: trade.closePrice != null ? Number(trade.closePrice) : null,
+    closeDate:  trade.closeDate || null,
+    openAction: trade.openAction || "BUY",
     status:     trade.status || "Open",
     strategy:   trade.strategy || `Long ${trade.type}`,
     delta:      trade.delta   != null ? Number(trade.delta)   : null,
@@ -48,7 +50,7 @@ export async function saveTrade(trade) {
     vega:       trade.vega    != null ? Number(trade.vega)    : null,
     iv:         trade.iv      != null ? Number(trade.iv)      : null,
     notes:      trade.notes   || "",
-    source:     trade.source  || "manual", // "manual" | "schwab"
+    source:     trade.source  || "manual",
     updatedAt:  new Date().toISOString(),
   };
 
