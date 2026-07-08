@@ -42,12 +42,12 @@ export async function exchangeCodeForTokens(code) {
 }
 
 // ─── TOKEN STORAGE (AES-256 encrypted) ───────────────────────────────────────
-async function storeTokens(tokens) {
+async function storeTokens(tokens, existingRefreshExpiry = null) {
   const payload = JSON.stringify({
     access_token:  tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_at:    Date.now() + tokens.expires_in * 1000,
-    refresh_expires_at: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+    refresh_expires_at: existingRefreshExpiry ?? Date.now() + 7 * 24 * 60 * 60 * 1000,
   });
   const encrypted = encrypt(payload);
   await fs.writeFile(TOKEN_FILE, encrypted, "utf8");
@@ -89,7 +89,7 @@ export async function getValidAccessToken() {
         },
       }
     );
-    await storeTokens({ ...data, refresh_token: tokens.refresh_token });
+    await storeTokens({ ...data, refresh_token: tokens.refresh_token }, tokens.refresh_expires_at);
     return data.access_token;
   }
 

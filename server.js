@@ -82,7 +82,8 @@ app.get("/api/schwab/auth-url", (req, res) => {
 // Check if Schwab is connected
 app.get("/api/schwab/status", async (req, res) => {
   const tokens = await getStoredTokens();
-  res.json({ connected: !!tokens });
+  const connected = !!tokens && Date.now() < tokens.refresh_expires_at;
+  res.json({ connected });
 });
 
 // Get all trades
