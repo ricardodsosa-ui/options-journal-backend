@@ -4,9 +4,12 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import { login, verifyToken } from "./auth.js";
-import { getSchwabAuthUrl, exchangeCodeForTokens, getStoredTokens } from "./schwab.js";
+import {
+  getSchwabAuthUrl, exchangeCodeForTokens, getStoredTokens,
+  getPriceHistory, getQuote,
+} from "./schwab.js";
 import { getTrades, saveTrade, deleteTrade } from "./db.js";
-import { startScheduler } from "./scheduler.js";
+import { startScheduler, syncTrades, refreshGreeks } from "./scheduler.js";
 
 dotenv.config();
 
@@ -80,6 +83,9 @@ app.get("/api/schwab/auth-url", (req, res) => {
 });
 
 // Check if Schwab is connected
+// FIX: "connected" now also requires the refresh token to be unexpired,
+// so the header shows DISCONNECTED (and the Connect button) when re-auth
+// is actually needed — instead of showing SCHWAB LIVE with dead tokens.
 app.get("/api/schwab/status", async (req, res) => {
   const tokens = await getStoredTokens();
   const connected = !!tokens && Date.now() < tokens.refresh_expires_at;
@@ -119,10 +125,57 @@ app.delete("/api/trades/:id", async (req, res) => {
 // Trigger a manual sync from Schwab
 app.post("/api/sync", async (req, res) => {
   try {
-    const { syncTrades } = await import("./scheduler.js");
     const count = await syncTrades();
     res.json({ success: true, newTrades: count });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── NEW: REAL MARKET DATA ROUTES ────────────────────────────────────────────
+
+// Daily price history for a symbol (real candles for the Technicals tab)
+// GET /api/prices/SPY  →  [{ date: "2026-07-07", close: 560.12 }, ...]
+app.get("/api/prices/:symbol", async (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase();
+    if (!/^[A-Z.$]{1,10}$/.test(symbol)) {
+      return res.status(400).json({ error: "Invalid symbol" });
+    }
+    const candles = await getPriceHistory(symbol);
+    res.json(candles);
+  } catch (err) {
+    console.error("Price history error:", err.message, err.response?.status);
+    res.status(err.message.includes("not connected") || err.message.includes("expired") ? 409 : 500)
+       .json({ error: err.message });
+  }
+});
+
+// Real-time quote for a symbol
+// GET /api/quote/SPY  →  { symbol, price, change, changePercent, high, low, volume }
+app.get("/api/quote/:symbol", async (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase();
+    if (!/^[A-Z.$]{1,10}$/.test(symbol)) {
+      return res.status(400).json({ error: "Invalid symbol" });
+    }
+    const quote = await getQuote(symbol);
+    if (!quote) return res.status(404).json({ error: "No quote found" });
+    res.json(quote);
+  } catch (err) {
+    console.error("Quote error:", err.message, err.response?.status);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Refresh Greeks + IV on all open positions from live options chains
+// POST /api/greeks/refresh  →  { success: true, updated: 3 }
+app.post("/api/greeks/refresh", async (req, res) => {
+  try {
+    const updated = await refreshGreeks();
+    res.json({ success: true, updated });
+  } catch (err) {
+    console.error("Greeks refresh error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

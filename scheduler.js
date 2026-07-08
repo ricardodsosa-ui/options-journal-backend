@@ -23,106 +23,39 @@ export async function syncTrades() {
 
     // Use first account (most users have one)
     const accountId = accounts[0]?.hashValue;
-    const lastSync  = null; // Always fetch full 90-day window; upsert handles dedup
+    const lastSync  = await getLastSyncTime();
 
     // 2. Fetch filled options orders since last sync
     const orders = await getOptionsOrders(accountId, lastSync);
     console.log(`Found ${orders.length} options orders`);
 
     let saved = 0;
-
-    // Sort orders by date — oldest first, so FIFO matching works correctly
-    orders.sort((a, b) => new Date(a.enteredTime) - new Date(b.enteredTime));
+    const chainCache = {}; // one chain fetch per ticker per sync
 
     for (const order of orders) {
-      const parsed = parseOrderToTrade(order);
-      if (!parsed) continue;
+      const trade = parseOrderToTrade(order);
+      if (!trade) continue;
 
-      if (parsed.action === "BUY") {
-        // Buy-to-open: create a new open trade row
-        await saveTrade({
-          id:         parsed.orderId,
-          date:       parsed.date,
-          ticker:     parsed.ticker,
-          type:       parsed.type,
-          strike:     parsed.strike,
-          expiry:     parsed.expiry,
-          premium:    parsed.price,
-          contracts:  parsed.contracts,
-          openAction: "BUY",
-          status:     "Open",
-          strategy:   `Long ${parsed.type}`,
-          source:     "schwab",
-        });
-
-        // Enrich with Greeks (best-effort)
-        try {
-          const chain = await getOptionsChain(parsed.ticker);
-          const g = extractGreeks(chain, parsed);
-          if (g) {
-            await saveTrade({
-              id: parsed.orderId,
-              date: parsed.date, ticker: parsed.ticker, type: parsed.type,
-              strike: parsed.strike, expiry: parsed.expiry,
-              premium: parsed.price, contracts: parsed.contracts,
-              openAction: "BUY", status: "Open", strategy: `Long ${parsed.type}`,
-              source: "schwab",
-              delta: g.delta, gamma: g.gamma, theta: g.theta, vega: g.vega, iv: g.volatility,
-            });
-          }
-        } catch {}
-
-        saved++;
-      } else {
-        // Sell-to-close: match against oldest open trades for this contract (FIFO)
-        const allTrades = await getTrades();
-        const matches = allTrades
-          .filter(t =>
-            t.status === "Open" &&
-            t.ticker === parsed.ticker &&
-            t.type === parsed.type &&
-            Number(t.strike) === parsed.strike &&
-            t.expiry === parsed.expiry &&
-            t.openAction === "BUY"
-          )
-          .sort((a, b) => new Date(a.date) - new Date(b.date)); // oldest first
-
-        let remaining = parsed.contracts;
-        for (const openTrade of matches) {
-          if (remaining <= 0) break;
-          const fillQty = Math.min(remaining, openTrade.contracts);
-
-          if (fillQty === openTrade.contracts) {
-            // Fully close this lot
-            await saveTrade({
-              ...openTrade,
-              closePrice: parsed.price,
-              closeDate:  parsed.date,
-              status:     "Closed",
-            });
-          } else {
-            // Partial close: split the lot into closed portion + remaining open portion
-            await saveTrade({
-              ...openTrade,
-              contracts:  fillQty,
-              closePrice: parsed.price,
-              closeDate:  parsed.date,
-              status:     "Closed",
-              id:         `${openTrade.id}-close-${parsed.orderId}`,
-            });
-            await saveTrade({
-              ...openTrade,
-              contracts: openTrade.contracts - fillQty,
-            });
-          }
-          remaining -= fillQty;
-          saved++;
+      // 3. Try to enrich with Greeks from options chain
+      try {
+        if (!chainCache[trade.ticker]) {
+          chainCache[trade.ticker] = await getOptionsChain(trade.ticker);
         }
-
-        if (remaining > 0) {
-          console.warn(`⚠ Sell order ${parsed.orderId} for ${parsed.contracts} ${parsed.ticker} ${parsed.type} had ${remaining} unmatched contracts (no matching open position)`);
+        const greeks = extractGreeks(chainCache[trade.ticker], trade);
+        if (greeks) {
+          trade.delta = greeks.delta;
+          trade.gamma = greeks.gamma;
+          trade.theta = greeks.theta;
+          trade.vega  = greeks.vega;
+          trade.iv    = greeks.volatility;
         }
+      } catch {
+        // Greeks enrichment is best-effort — don't fail the sync
       }
+
+      trade.source = "schwab";
+      await saveTrade(trade);
+      saved++;
     }
 
     console.log(`✓ Sync complete — saved ${saved} trades`);
@@ -134,7 +67,46 @@ export async function syncTrades() {
     console.error("Schwab response:", JSON.stringify(err.response?.data));
     console.error("Failed URL:", err.config?.url);
     throw err;
+  }
 }
+
+// ─── NEW: REFRESH GREEKS ON ALL OPEN POSITIONS ───────────────────────────────
+// Called from POST /api/greeks/refresh. Works for BOTH schwab-synced and
+// manually logged trades, as long as ticker/type/strike/expiry are filled in.
+// Greeks change constantly, so this lets you pull current values on demand.
+export async function refreshGreeks() {
+  const tokens = await getStoredTokens();
+  if (!tokens) throw new Error("Schwab not connected");
+
+  const trades = await getTrades();
+  const open = trades.filter(t => t.status === "Open" && t.ticker && t.expiry);
+
+  const chainCache = {}; // one chain fetch per ticker
+  let updated = 0;
+
+  for (const trade of open) {
+    try {
+      if (!chainCache[trade.ticker]) {
+        chainCache[trade.ticker] = await getOptionsChain(trade.ticker);
+      }
+      const greeks = extractGreeks(chainCache[trade.ticker], trade);
+      if (greeks) {
+        trade.delta = greeks.delta;
+        trade.gamma = greeks.gamma;
+        trade.theta = greeks.theta;
+        trade.vega  = greeks.vega;
+        trade.iv    = greeks.volatility;
+        await saveTrade(trade);
+        updated++;
+      }
+    } catch (err) {
+      console.error(`Greeks refresh failed for ${trade.ticker}:`, err.message);
+      // best-effort — continue with remaining positions
+    }
+  }
+
+  console.log(`✓ Greeks refreshed on ${updated} open position${updated !== 1 ? "s" : ""}`);
+  return updated;
 }
 
 // ─── EXTRACT GREEKS FROM CHAIN RESPONSE ──────────────────────────────────────
